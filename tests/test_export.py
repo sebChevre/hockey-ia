@@ -95,6 +95,16 @@ def test_zip_contains_required_readable_tables_metadata_and_quality_report():
             for event in events
             if event["event_type"] == "PENALTY_END"
         )
+        goals = [event for event in events if event["event_type"] == "GOAL"]
+        assert goals
+        assert all(
+            sum(
+                bool(event[field])
+                for field in ("assist_1_player_id", "assist_2_player_id")
+            )
+            <= 2
+            for event in goals
+        )
         assert len(list(csv.DictReader(StringIO(archive.read("matches.csv").decode())))) == 100
         pandas_matches = pd.read_csv(BytesIO(archive.read("matches.csv")))
         pandas_shots = pd.read_csv(BytesIO(archive.read("shots.csv")))

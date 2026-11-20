@@ -157,6 +157,8 @@ def event_to_row(event: Event) -> dict[str, object]:
         "event_type": event.event_type.value,
         "team_id": event.team_id,
         "player_id": event.player_id,
+        "assist_1_player_id": event.assist_1_player_id,
+        "assist_2_player_id": event.assist_2_player_id,
         "faceoff_winner_player_id": event.faceoff_winner_player_id,
         "faceoff_loser_player_id": event.faceoff_loser_player_id,
         "penalty_type": event.penalty_type.value if event.penalty_type else None,

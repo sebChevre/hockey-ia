@@ -115,12 +115,13 @@ Le bouton **Générer** valide les champs, lance la génération et affiche une 
 
 1. Chaque `GOAL` et `SAVE` référence exactement un `SHOT` via `related_shot_id` ; un tir ne peut avoir qu'une seule issue finale.
 2. Le score augmente uniquement à l'occasion d'un `GOAL` ; le score final est recalculable depuis les événements.
-3. Une pénalité est mineure (`MINEURE`, 120 secondes) dans 95 % des cas ou majeure (`MAJEURE`, 300 secondes) dans 5 % des cas. `PENALTY` constate la pénalité, `PENALTY_START` démarre son service et `PENALTY_END` le termine ; les événements de service référencent la pénalité d'origine.
-4. Chaque équipe peut avoir au plus deux pénalités en service. Les pénalités supplémentaires attendent leur tour et leur chronomètre ne démarre qu'à `PENALTY_START`. Le nombre de patineurs ne descend jamais sous trois.
-5. Un but de l'équipe en supériorité termine au plus une pénalité mineure active de l'équipe adverse (celle dont l'échéance est la plus proche), avec `PENALTY_END` portant la raison `GOAL`. Les majeures ne prennent pas fin sur un but. À expiration normale, la raison est `TIME_EXPIRED`. L'ordre à temps égal est `GOAL`, `PENALTY_END`, éventuel `PENALTY_START` de la file, puis `FACEOFF`.
-6. Un événement de joueur doit référencer un joueur de l'équipe indiquée ; un tir ne peut être attribué à un gardien dans le MVP.
-7. L'ordre des événements est déterministe, trié par `(match_id, elapsed_seconds, event_sequence)` ; plusieurs événements peuvent partager la même seconde.
-8. Un `FACEOFF` est produit au début de chaque période et après chaque but, sans prétendre modéliser tous les engagements réels.
+3. Un but crédite zéro, un ou deux assists : respectivement 15 %, 35 % et 50 % des buts. Ces proportions sont une hypothèse synthétique, pas une statistique réelle. Les assistants sont des patineurs distincts du buteur et de la même équipe.
+4. Une pénalité est mineure (`MINEURE`, 120 secondes) dans 95 % des cas ou majeure (`MAJEURE`, 300 secondes) dans 5 % des cas. `PENALTY` constate la pénalité, `PENALTY_START` démarre son service et `PENALTY_END` le termine ; les événements de service référencent la pénalité d'origine.
+5. Chaque équipe peut avoir au plus deux pénalités en service. Les pénalités supplémentaires attendent leur tour et leur chronomètre ne démarre qu'à `PENALTY_START`. Le nombre de patineurs ne descend jamais sous trois.
+6. Un but de l'équipe en supériorité termine au plus une pénalité mineure active de l'équipe adverse (celle dont l'échéance est la plus proche), avec `PENALTY_END` portant la raison `GOAL`. Les majeures ne prennent pas fin sur un but. À expiration normale, la raison est `TIME_EXPIRED`. L'ordre à temps égal est `GOAL`, `PENALTY_END`, éventuel `PENALTY_START` de la file, puis `FACEOFF`.
+7. Un événement de joueur doit référencer un joueur de l'équipe indiquée ; un tir ne peut être attribué à un gardien dans le MVP.
+8. L'ordre des événements est déterministe, trié par `(match_id, elapsed_seconds, event_sequence)` ; plusieurs événements peuvent partager la même seconde.
+9. Un `FACEOFF` est produit au début de chaque période et après chaque but, sans prétendre modéliser tous les engagements réels.
 
 ### 4.4 Génération probabiliste (hybride simplifiée)
 
@@ -149,7 +150,7 @@ is_goal = rng.binomial(1, p_goal)
 
 Les coefficients `beta_*` doivent être **configurés, documentés et calibrés** sur des ordres de grandeur plausibles ; ne pas prétendre qu'ils sont empiriquement estimés. Le modèle de simulation n'est pas un modèle ML entraîné.
 
-6. Si le tir n'est pas un but, tirer une issue `SAVED` ou `MISSED` selon une probabilité documentée ; créer les événements correspondants.
+6. Si le tir est un but, lui attribuer zéro, un ou deux assists selon les proportions documentées. Si le tir n'est pas un but, tirer une issue `SAVED` ou `MISSED` selon une probabilité documentée ; créer les événements correspondants.
 7. Mettre à jour l'état et les scores après chaque événement.
 
 **Important :** sauvegarder `true_goal_probability` dans un fichier de référence réservé à l'évaluation du simulateur, **pas dans le dataset d'entraînement `shots.csv`**. Ne pas inclure `shot_outcome`, le score après le tir ou tout événement futur parmi les features du classificateur.
@@ -172,7 +173,7 @@ Les colonnes suivantes sont obligatoires ; des colonnes supplémentaires sont po
 
 ### `events.csv`
 
-`event_id`, `match_id`, `event_sequence`, `elapsed_seconds`, `period`, `event_type`, `team_id`, `player_id`, `faceoff_winner_player_id`, `faceoff_loser_player_id`, `penalty_type`, `penalty_duration_seconds`, `related_penalty_event_id`, `penalty_end_reason`, `x`, `y`, `related_shot_id`, `home_score_before`, `away_score_before`, `manpower_situation`.
+`event_id`, `match_id`, `event_sequence`, `elapsed_seconds`, `period`, `event_type`, `team_id`, `player_id`, `assist_1_player_id`, `assist_2_player_id`, `faceoff_winner_player_id`, `faceoff_loser_player_id`, `penalty_type`, `penalty_duration_seconds`, `related_penalty_event_id`, `penalty_end_reason`, `x`, `y`, `related_shot_id`, `home_score_before`, `away_score_before`, `manpower_situation`.
 
 Les champs non applicables à un type d'événement peuvent être nuls ; le dictionnaire précise lesquels.
 

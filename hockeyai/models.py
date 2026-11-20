@@ -180,6 +180,8 @@ class Event:
     penalty_duration_seconds: int | None = None
     related_penalty_event_id: str | None = None
     penalty_end_reason: PenaltyEndReason | None = None
+    assist_1_player_id: str | None = None
+    assist_2_player_id: str | None = None
 
     def __post_init__(self) -> None:
         _validate_identifier("event_id", self.event_id)
@@ -201,6 +203,8 @@ class Event:
             ("faceoff_winner_player_id", self.faceoff_winner_player_id),
             ("faceoff_loser_player_id", self.faceoff_loser_player_id),
             ("related_penalty_event_id", self.related_penalty_event_id),
+            ("assist_1_player_id", self.assist_1_player_id),
+            ("assist_2_player_id", self.assist_2_player_id),
         ):
             if value is not None:
                 _validate_identifier(name, value)
@@ -223,6 +227,23 @@ class Event:
                 raise ValueError("FACEOFF winner and loser must be different players")
         elif any(player_id is not None for player_id in faceoff_players):
             raise ValueError("faceoff player IDs are only valid on FACEOFF events")
+        assist_player_ids = (self.assist_1_player_id, self.assist_2_player_id)
+        if self.assist_2_player_id is not None and self.assist_1_player_id is None:
+            raise ValueError("assist_2_player_id requires assist_1_player_id")
+        if self.event_type is EventType.GOAL:
+            if any(player_id is not None for player_id in assist_player_ids) and (
+                self.team_id is None or self.player_id is None
+            ):
+                raise ValueError("assisted GOAL events must identify team and scorer")
+            if self.player_id is not None and self.player_id in assist_player_ids:
+                raise ValueError("goal scorer cannot receive an assist")
+            if (
+                self.assist_1_player_id is not None
+                and self.assist_1_player_id == self.assist_2_player_id
+            ):
+                raise ValueError("assist players must be different")
+        elif any(player_id is not None for player_id in assist_player_ids):
+            raise ValueError("assist player IDs are only valid on GOAL events")
         if self.event_type is EventType.PENALTY:
             if self.team_id is None or self.player_id is None:
                 raise ValueError("PENALTY events must identify team and player")

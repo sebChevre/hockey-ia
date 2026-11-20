@@ -22,8 +22,8 @@ from hockeyai.validation import (
     validate_corrupted_events,
 )
 
-GENERATOR_VERSION = "0.3.0"
-SCHEMA_VERSION = "1.2.0"
+GENERATOR_VERSION = "0.4.0"
+SCHEMA_VERSION = "1.3.0"
 
 TEAMS_COLUMNS = (
     "team_id",
@@ -60,6 +60,8 @@ EVENTS_COLUMNS = (
     "event_type",
     "team_id",
     "player_id",
+    "assist_1_player_id",
+    "assist_2_player_id",
     "faceoff_winner_player_id",
     "faceoff_loser_player_id",
     "penalty_type",
@@ -153,6 +155,7 @@ seconds. Empty CSV cells represent nulls.
 | `period` | integer, 1–3 | no | Period derived from elapsed time. |
 | `event_type` | enum | no | FACEOFF, SHOT, SAVE, GOAL, PENALTY, PENALTY_START, PENALTY_END. |
 | `team_id`, `player_id` | string | event-dependent | Related team/player foreign keys. |
+| `assist_1_player_id`, `assist_2_player_id` | string | GOAL only | Zero, one, or two distinct skaters on the scoring team; the scorer is not an assist. |
 | `faceoff_winner_player_id`, `faceoff_loser_player_id` | string | FACEOFF only | Opposing forwards who won and lost the engagement. |
 | `penalty_type` | enum | PENALTY only | `MINEURE` (120 s) or `MAJEURE` (300 s). |
 | `penalty_duration_seconds` | integer, seconds | PENALTY only | Service duration; the clock starts at `PENALTY_START`. |

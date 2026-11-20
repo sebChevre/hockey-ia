@@ -400,6 +400,8 @@ def _render_explorer() -> None:
                 "event_type": event.event_type.value,
                 "team_id": event.team_id,
                 "player_id": event.player_id,
+                "assist_1_player_id": event.assist_1_player_id,
+                "assist_2_player_id": event.assist_2_player_id,
                 "penalty_type": (
                     event.penalty_type.value if event.penalty_type else None
                 ),

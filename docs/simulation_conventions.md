@@ -29,6 +29,10 @@
   three-standard-error tolerance.
 - `team_imbalance` controls the standard deviation of team ratings, increasing
   it from `0.025` at zero to `0.205` at 100; ratings are clipped to `[0.05, 0.95]`.
+- Each goal is assigned zero, one, or two assists with probabilities 15%, 35%,
+  and 50%, respectively. Assist recipients are distinct skaters on the scoring
+  team, excluding the scorer. These proportions are synthetic assumptions,
+  not measured hockey statistics.
 - Penalty counts are Poisson with the configured expectation. Each assessed
  penalty is minor (`MINEURE`, 120 seconds) with 95% probability or major
  (`MAJEURE`, 300 seconds) with 5% probability. Each team serves at most two

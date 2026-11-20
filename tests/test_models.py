@@ -1,4 +1,4 @@
-from dataclasses import fields
+from dataclasses import fields, replace
 
 import pytest
 
@@ -86,6 +86,35 @@ def test_penalty_event_contracts_and_type_durations():
         )
 
     assert PenaltyEndReason.GOAL.value == "GOAL"
+
+
+def test_goal_assists_are_distinct_and_only_allowed_on_goals():
+    goal = Event(
+        "E1",
+        "M1",
+        1,
+        10,
+        1,
+        EventType.GOAL,
+        "T1",
+        "P1",
+        None,
+        None,
+        "S1",
+        0,
+        0,
+        ManpowerSituation(),
+        assist_1_player_id="P2",
+        assist_2_player_id="P3",
+    )
+    assert (goal.assist_1_player_id, goal.assist_2_player_id) == ("P2", "P3")
+
+    with pytest.raises(ValueError, match="must be different"):
+        replace(goal, assist_2_player_id="P2")
+    with pytest.raises(ValueError, match="requires assist_1_player_id"):
+        replace(goal, assist_1_player_id=None)
+    with pytest.raises(ValueError, match="only valid on GOAL"):
+        replace(goal, event_type=EventType.SHOT)
 
 
 def test_match_rejects_same_team_and_negative_score():

@@ -87,6 +87,32 @@ def test_roster_and_event_tables_are_consistent_and_reproducible():
     )
     players_by_id = {player.player_id: player for player in first.players}
     matches_by_id = {match.match_id: match for match in first.matches}
+    goals = [event for event in first.events if event.event_type is EventType.GOAL]
+    assists_per_goal = Counter(
+        int(event.assist_1_player_id is not None)
+        + int(event.assist_2_player_id is not None)
+        for event in goals
+    )
+    assert set(assists_per_goal) == {0, 1, 2}
+    assert assists_per_goal[0] / len(goals) == pytest.approx(0.15, abs=0.06)
+    assert assists_per_goal[1] / len(goals) == pytest.approx(0.35, abs=0.06)
+    assert assists_per_goal[2] / len(goals) == pytest.approx(0.50, abs=0.06)
+    for goal in goals:
+        assistant_ids = tuple(
+            player_id
+            for player_id in (
+                goal.assist_1_player_id,
+                goal.assist_2_player_id,
+            )
+            if player_id is not None
+        )
+        assert goal.player_id not in assistant_ids
+        assert len(set(assistant_ids)) == len(assistant_ids)
+        assert all(
+            players_by_id[player_id].team_id == goal.team_id
+            and players_by_id[player_id].position is not PlayerPosition.GOALIE
+            for player_id in assistant_ids
+        )
     faceoffs = [
         event for event in first.events if event.event_type is EventType.FACEOFF
     ]

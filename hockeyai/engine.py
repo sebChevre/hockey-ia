@@ -41,6 +41,7 @@ _SHOT_TYPES = ("WRIST", "SLAP", "SNAP", "BACKHAND")
 _FACEOFF_OUTCOME_STREAM = 2
 _MINOR_PENALTY_SHARE = 0.95
 _MAX_ACTIVE_PENALTIES_PER_TEAM = 2
+_GOAL_ASSIST_COUNT_PROBABILITIES = (0.15, 0.35, 0.50)
 
 
 @dataclass(slots=True)
@@ -255,6 +256,8 @@ def _simulate_match(
         penalty_duration_seconds: int | None = None,
         related_penalty_event_id: str | None = None,
         penalty_end_reason: PenaltyEndReason | None = None,
+        assist_1_player_id: str | None = None,
+        assist_2_player_id: str | None = None,
     ) -> Event:
         nonlocal event_number
         event_number += 1
@@ -280,6 +283,8 @@ def _simulate_match(
             penalty_duration_seconds=penalty_duration_seconds,
             related_penalty_event_id=related_penalty_event_id,
             penalty_end_reason=penalty_end_reason,
+            assist_1_player_id=assist_1_player_id,
+            assist_2_player_id=assist_2_player_id,
         )
         events.append(event)
         return event
@@ -447,6 +452,9 @@ def _simulate_match(
             )
             truth.append(ShotGroundTruth(shot_id, probability))
             if outcome is ShotOutcome.GOAL:
+                assists = _choose_assist_player_ids(
+                    players_by_team[shooter_team_id], shooter, rng
+                )
                 add_event(
                     current_time,
                     EventType.GOAL,
@@ -456,6 +464,8 @@ def _simulate_match(
                     y,
                     related_shot_id=shot_id,
                     situation=situation,
+                    assist_1_player_id=assists[0] if assists else None,
+                    assist_2_player_id=assists[1] if len(assists) > 1 else None,
                 )
                 if shooter_team_id == home_team_id:
                     home_score += 1
@@ -656,6 +666,26 @@ def _choose_shooter(
     )
     weights /= weights.sum()
     return skaters[int(rng.choice(len(skaters), p=weights))]
+
+
+def _choose_assist_player_ids(
+    players: tuple[Player, ...],
+    scorer: Player,
+    rng: np.random.Generator,
+) -> tuple[str, ...]:
+    assist_count = int(
+        rng.choice(3, p=_GOAL_ASSIST_COUNT_PROBABILITIES)
+    )
+    if assist_count == 0:
+        return ()
+    eligible = tuple(
+        player
+        for player in players
+        if player.position is not PlayerPosition.GOALIE
+        and player.player_id != scorer.player_id
+    )
+    chosen_indices = rng.choice(len(eligible), size=assist_count, replace=False)
+    return tuple(eligible[int(index)].player_id for index in chosen_indices)
 
 
 def _finite(name: str, value: float) -> None:

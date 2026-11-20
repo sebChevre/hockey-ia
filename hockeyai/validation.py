@@ -119,6 +119,24 @@ def validate_dataset(
                 errors.append(f"event {event.event_id} player does not belong to its team")
             elif event.event_type is EventType.SAVE and player.position is not PlayerPosition.GOALIE:
                 errors.append(f"save {event.event_id} must identify a goalie")
+        for assist_player_id in (
+            event.assist_1_player_id,
+            event.assist_2_player_id,
+        ):
+            if assist_player_id is None:
+                continue
+            assist_player = players.get(assist_player_id)
+            if assist_player is None:
+                errors.append(
+                    f"goal {event.event_id} references unknown assist player "
+                    f"{assist_player_id}"
+                )
+            elif assist_player.team_id != event.team_id:
+                errors.append(f"goal {event.event_id} assist player is on the wrong team")
+            elif assist_player.position is PlayerPosition.GOALIE:
+                errors.append(f"goal {event.event_id} assist player must be a skater")
+            elif assist_player_id == event.player_id:
+                errors.append(f"goal {event.event_id} scorer also receives an assist")
         if event.event_type is EventType.FACEOFF:
             winner = players.get(event.faceoff_winner_player_id or "")
             loser = players.get(event.faceoff_loser_player_id or "")
@@ -244,6 +262,13 @@ def validate_dataset(
                 if event.event_type is not expected_type:
                     errors.append(
                         f"outcome event {event.event_id} does not match shot {shot.shot_id}"
+                    )
+                if (
+                    event.event_type is EventType.GOAL
+                    and event.player_id != shot.player_id
+                ):
+                    errors.append(
+                        f"goal {event.event_id} scorer does not match its shot"
                     )
                 if (
                     event.match_id != shot.match_id
@@ -436,6 +461,43 @@ def validate_corrupted_events(
             "penalty_end_reason"
         ) not in {reason.value for reason in PenaltyEndReason}:
             errors.append(f"[penalty] event {label} has invalid end reason")
+
+        assist_ids = (
+            row.get("assist_1_player_id"),
+            row.get("assist_2_player_id"),
+        )
+        if any(assist_id is not None for assist_id in assist_ids):
+            if event_type != EventType.GOAL.value:
+                errors.append(f"[reference] non-goal event {label} has assist players")
+            if assist_ids[1] is not None and assist_ids[0] is None:
+                errors.append(f"[missing] goal event {label} has assist 2 without assist 1")
+            if assist_ids[0] is not None and assist_ids[0] == assist_ids[1]:
+                errors.append(f"[reference] goal event {label} repeats an assist player")
+            for assist_id in assist_ids:
+                if assist_id is None:
+                    continue
+                assist_player = (
+                    players.get(assist_id)
+                    if isinstance(assist_id, str)
+                    else None
+                )
+                if assist_player is None:
+                    errors.append(
+                        f"[reference] goal event {label} has unknown assist player "
+                        f"{assist_id}"
+                    )
+                elif assist_player.team_id != team_id:
+                    errors.append(
+                        f"[reference] goal event {label} assist player is on the wrong team"
+                    )
+                elif assist_player.position is PlayerPosition.GOALIE:
+                    errors.append(
+                        f"[reference] goal event {label} assist player is a goalie"
+                    )
+                elif assist_id == player_id:
+                    errors.append(
+                        f"[reference] goal event {label} scorer also receives an assist"
+                    )
 
         if event_type == EventType.FACEOFF.value:
             faceoff_players = {}
