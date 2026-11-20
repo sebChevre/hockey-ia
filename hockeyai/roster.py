@@ -9,6 +9,8 @@ import numpy as np
 from hockeyai.config import SimulationConfig
 from hockeyai.models import Player, PlayerPosition, Team
 
+_FACEOFF_SKILL_STREAM = 1
+
 
 @dataclass(frozen=True, slots=True)
 class Roster:
@@ -20,6 +22,12 @@ def generate_roster(
     config: SimulationConfig, rng: np.random.Generator
 ) -> Roster:
     """Create stable team/player IDs and the specified 18 skaters + 2 goalies."""
+    # Keep the new skill stream separate so existing roster draws stay stable.
+    faceoff_rng = np.random.Generator(
+        np.random.PCG64(
+            np.random.SeedSequence([config.seed, _FACEOFF_SKILL_STREAM])
+        )
+    )
     rating_spread = 0.025 + 0.18 * config.team_imbalance / 100
     teams: list[Team] = []
     players: list[Player] = []
@@ -52,6 +60,9 @@ def generate_roster(
                     shooting_skill=_skill(rng, attack_rating, position),
                     passing_skill=_skill(rng, 0.5, position),
                     defensive_skill=_skill(rng, defense_rating, position),
+                    faceoff_skill=float(
+                        np.clip(faceoff_rng.normal(0.5, 0.14), 0, 1)
+                    ),
                 )
             )
 

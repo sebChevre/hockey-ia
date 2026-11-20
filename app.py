@@ -167,8 +167,10 @@ def _render_generator() -> None:
                 help=(
                     "Moyenne visée par match, échantillonnée selon une loi de "
                     "Poisson : le nombre exact varie d'un match à l'autre. Les "
-                    "pénalités créent aussi des changements de supériorité "
-                    "numérique, qui influencent les tirs."
+                    "appels donnent 95 % de mineures (2 min) et 5 % de majeures "
+                    "(5 min). Deux pénalités au plus sont servies simultanément "
+                    "par équipe ; les suivantes attendent. Un but adverse en "
+                    "supériorité peut terminer une mineure, jamais une majeure."
                 ),
             )
         with third_row[1]:
@@ -398,6 +400,16 @@ def _render_explorer() -> None:
                 "event_type": event.event_type.value,
                 "team_id": event.team_id,
                 "player_id": event.player_id,
+                "penalty_type": (
+                    event.penalty_type.value if event.penalty_type else None
+                ),
+                "penalty_duration_seconds": event.penalty_duration_seconds,
+                "related_penalty_event_id": event.related_penalty_event_id,
+                "penalty_end_reason": (
+                    event.penalty_end_reason.value
+                    if event.penalty_end_reason
+                    else None
+                ),
                 "home_score_before": event.home_score_before,
                 "away_score_before": event.away_score_before,
                 "manpower_situation": event.manpower_situation.code,
@@ -408,7 +420,15 @@ def _render_explorer() -> None:
     st.dataframe(timeline, hide_index=True, use_container_width=True)
 
     match_shots = [shot for shot in dataset.shots if shot.match_id == match_id]
-    st.plotly_chart(_rink_figure(match_shots), use_container_width=True)
+    st.caption(
+        "Couleur : bleu = tir non converti, rouge = but. Symbole : cercle = "
+        "domicile, triangle = extérieur. Les deux équipes attaquent dans le "
+        "même repère vers (60, 15)."
+    )
+    st.plotly_chart(
+        _rink_figure(match_shots, match.home_team_id, match.away_team_id),
+        use_container_width=True,
+    )
 
     st.subheader("Aperçu des cinq datasets propres")
     tabs = st.tabs(_TABLE_LABELS)
@@ -488,24 +508,44 @@ def _render_export() -> None:
     )
 
 
-def _rink_figure(shots: Sequence[Shot]) -> go.Figure:
+def _rink_figure(
+    shots: Sequence[Shot], home_team_id: str, away_team_id: str
+) -> go.Figure:
     figure = go.Figure()
-    for is_goal, label, color in (
-        (False, "Arrêt ou tir manqué", "#2563eb"),
-        (True, "But", "#dc2626"),
+    for team_id, team_label, symbol in (
+        (home_team_id, "Domicile", "circle"),
+        (away_team_id, "Extérieur", "triangle-up"),
     ):
-        selected = [shot for shot in shots if shot.is_goal is is_goal]
-        figure.add_trace(
-            go.Scatter(
-                x=[shot.x for shot in selected],
-                y=[shot.y for shot in selected],
-                mode="markers",
-                name=label,
-                marker={"color": color, "size": 10, "opacity": 0.8},
-                text=[shot.shot_id for shot in selected],
-                hovertemplate="%{text}<br>x=%{x:.1f} m, y=%{y:.1f} m<extra></extra>",
+        for is_goal, outcome_label, color in (
+            (False, "Tir non converti", "#2563eb"),
+            (True, "But", "#dc2626"),
+        ):
+            selected = [
+                shot
+                for shot in shots
+                if shot.team_id == team_id and shot.is_goal is is_goal
+            ]
+            figure.add_trace(
+                go.Scatter(
+                    x=[shot.x for shot in selected],
+                    y=[shot.y for shot in selected],
+                    mode="markers",
+                    name=f"{team_label} ({team_id}) — {outcome_label}",
+                    legendgroup=team_id,
+                    marker={
+                        "color": color,
+                        "symbol": symbol,
+                        "size": 10,
+                        "opacity": 0.8,
+                    },
+                    text=[shot.shot_id for shot in selected],
+                    hovertemplate=(
+                        "%{text}<br>"
+                        f"{team_label} ({team_id}) · {outcome_label}"
+                        "<br>x=%{x:.1f} m, y=%{y:.1f} m<extra></extra>"
+                    ),
+                )
             )
-        )
     figure.add_shape(
         type="rect",
         x0=0,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 import heapq
 import math
@@ -22,6 +23,8 @@ from hockeyai.models import (
     EventType,
     ManpowerSituation,
     Match,
+    PenaltyEndReason,
+    PenaltyType,
     Player,
     PlayerPosition,
     Shot,
@@ -35,14 +38,19 @@ from hockeyai.roster import generate_roster
 ProgressCallback = Callable[[int, int], None]
 _BASE_SHOTS_PER_MATCH = 62.5
 _SHOT_TYPES = ("WRIST", "SLAP", "SNAP", "BACKHAND")
+_FACEOFF_OUTCOME_STREAM = 2
+_MINOR_PENALTY_SHARE = 0.95
+_MAX_ACTIVE_PENALTIES_PER_TEAM = 2
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class _Penalty:
     event_id: str
     team_id: str
     player_id: str
-    expires_at: float
+    penalty_type: PenaltyType
+    duration_seconds: int
+    expires_at: float | None = None
 
 
 def goal_probability(
@@ -181,10 +189,29 @@ def _simulate_match(
 ) -> tuple[Match, tuple[Event, ...], tuple[Shot, ...], tuple[ShotGroundTruth, ...]]:
     home_team = teams_by_id[home_team_id]
     away_team = teams_by_id[away_team_id]
+    faceoff_rng = np.random.Generator(
+        np.random.PCG64(
+            np.random.SeedSequence([match_seed, _FACEOFF_OUTCOME_STREAM])
+        )
+    )
+    home_forwards = tuple(
+        player
+        for player in players_by_team[home_team_id]
+        if player.position is PlayerPosition.FORWARD
+    )
+    away_forwards = tuple(
+        player
+        for player in players_by_team[away_team_id]
+        if player.position is PlayerPosition.FORWARD
+    )
     events: list[Event] = []
     shots: list[Shot] = []
     truth: list[ShotGroundTruth] = []
     active_penalties: dict[str, _Penalty] = {}
+    queued_penalties: dict[str, deque[_Penalty]] = {
+        home_team_id: deque(),
+        away_team_id: deque(),
+    }
     home_score = 0
     away_score = 0
     shot_number = 0
@@ -201,8 +228,8 @@ def _simulate_match(
         schedule(float(period_start), 1, "FACEOFF")
     penalty_count = int(rng.poisson(config.penalties_per_match))
     for penalty_number in range(penalty_count):
-        start = float(rng.uniform(0, REGULATION_LENGTH_SECONDS - 120))
-        schedule(start, 2, "PENALTY_START", str(penalty_number))
+        start = float(rng.uniform(0, REGULATION_LENGTH_SECONDS))
+        schedule(start, 2, "PENALTY_ASSESSMENT", str(penalty_number))
 
     def manpower() -> ManpowerSituation:
         home_active = sum(
@@ -222,6 +249,12 @@ def _simulate_match(
         y: float | None = None,
         related_shot_id: str | None = None,
         situation: ManpowerSituation | None = None,
+        faceoff_winner_player_id: str | None = None,
+        faceoff_loser_player_id: str | None = None,
+        penalty_type: PenaltyType | None = None,
+        penalty_duration_seconds: int | None = None,
+        related_penalty_event_id: str | None = None,
+        penalty_end_reason: PenaltyEndReason | None = None,
     ) -> Event:
         nonlocal event_number
         event_number += 1
@@ -241,9 +274,78 @@ def _simulate_match(
             home_score_before=home_score,
             away_score_before=away_score,
             manpower_situation=situation or manpower(),
+            faceoff_winner_player_id=faceoff_winner_player_id,
+            faceoff_loser_player_id=faceoff_loser_player_id,
+            penalty_type=penalty_type,
+            penalty_duration_seconds=penalty_duration_seconds,
+            related_penalty_event_id=related_penalty_event_id,
+            penalty_end_reason=penalty_end_reason,
         )
         events.append(event)
         return event
+
+    def active_penalty_count(team_id: str) -> int:
+        return sum(penalty.team_id == team_id for penalty in active_penalties.values())
+
+    def start_penalty(penalty: _Penalty, at: float) -> None:
+        elapsed = min(REGULATION_LENGTH_SECONDS, max(0, int(at)))
+        penalty.expires_at = float(elapsed + penalty.duration_seconds)
+        active_penalties[penalty.event_id] = penalty
+        add_event(
+            at,
+            EventType.PENALTY_START,
+            penalty.team_id,
+            penalty.player_id,
+            situation=manpower(),
+            related_penalty_event_id=penalty.event_id,
+        )
+        schedule(
+            penalty.expires_at,
+            0,
+            "PENALTY_END",
+            penalty.event_id,
+        )
+
+    def end_penalty(penalty: _Penalty, at: float, reason: PenaltyEndReason) -> None:
+        if active_penalties.pop(penalty.event_id, None) is None:
+            return
+        add_event(
+            at,
+            EventType.PENALTY_END,
+            penalty.team_id,
+            penalty.player_id,
+            situation=manpower(),
+            related_penalty_event_id=penalty.event_id,
+            penalty_end_reason=reason,
+        )
+        queue = queued_penalties[penalty.team_id]
+        if (
+            queue
+            and active_penalty_count(penalty.team_id)
+            < _MAX_ACTIVE_PENALTIES_PER_TEAM
+        ):
+            start_penalty(queue.popleft(), at)
+
+    def add_faceoff(
+        at: float, situation: ManpowerSituation | None = None
+    ) -> Event:
+        home_player = home_forwards[int(faceoff_rng.integers(len(home_forwards)))]
+        away_player = away_forwards[int(faceoff_rng.integers(len(away_forwards)))]
+        home_win_probability = _faceoff_win_probability(
+            home_player.faceoff_skill, away_player.faceoff_skill
+        )
+        winner, loser = (
+            (home_player, away_player)
+            if faceoff_rng.random() < home_win_probability
+            else (away_player, home_player)
+        )
+        return add_event(
+            at,
+            EventType.FACEOFF,
+            situation=situation,
+            faceoff_winner_player_id=winner.player_id,
+            faceoff_loser_player_id=loser.player_id,
+        )
 
     current_time = 0.0
     while current_time < REGULATION_LENGTH_SECONDS:
@@ -359,7 +461,38 @@ def _simulate_match(
                     home_score += 1
                 else:
                     away_score += 1
-                add_event(current_time, EventType.FACEOFF, situation=situation)
+                penalized_team_id = (
+                    home_team_id
+                    if shooter_team_id == away_team_id
+                    and situation.home_skaters < situation.away_skaters
+                    else away_team_id
+                    if shooter_team_id == home_team_id
+                    and situation.away_skaters < situation.home_skaters
+                    else None
+                )
+                if penalized_team_id is not None:
+                    minor_penalties = [
+                        penalty
+                        for penalty in active_penalties.values()
+                        if penalty.team_id == penalized_team_id
+                        and penalty.penalty_type is PenaltyType.MINOR
+                    ]
+                    if minor_penalties:
+                        penalty_to_end = min(
+                            minor_penalties,
+                            key=lambda penalty: (
+                                penalty.expires_at
+                                if penalty.expires_at is not None
+                                else math.inf,
+                                penalty.event_id,
+                            ),
+                        )
+                        end_penalty(
+                            penalty_to_end,
+                            current_time,
+                            PenaltyEndReason.GOAL,
+                        )
+                add_faceoff(current_time)
             elif outcome is ShotOutcome.SAVED:
                 goalie = away_goalie if shooter_team_id == home_team_id else home_goalie
                 add_event(
@@ -379,55 +512,66 @@ def _simulate_match(
         at, _, _, kind, token = heapq.heappop(pending)
         current_time = at
         if kind == "FACEOFF":
-            add_event(current_time, EventType.FACEOFF)
+            add_faceoff(current_time)
         elif kind == "PENALTY_END":
-            penalty = active_penalties.pop(token, None)
+            penalty = active_penalties.get(token or "")
             if penalty is not None:
-                add_event(
+                end_penalty(
+                    penalty,
                     current_time,
-                    EventType.PENALTY_END,
-                    penalty.team_id,
-                    penalty.player_id,
-                    situation=manpower(),
+                    PenaltyEndReason.TIME_EXPIRED,
                 )
-        else:
+        elif kind == "PENALTY_ASSESSMENT":
             penalized_team_id = (
                 home_team_id if rng.integers(0, 2) == 0 else away_team_id
             )
-            team_skaters = (
-                situation.home_skaters
-                if penalized_team_id == home_team_id
-                else situation.away_skaters
-            )
-            if team_skaters <= 3:
-                continue
+            active_player_ids = {
+                penalty.player_id for penalty in active_penalties.values()
+            }
+            queued_player_ids = {
+                penalty.player_id
+                for team_queue in queued_penalties.values()
+                for penalty in team_queue
+            }
             eligible = tuple(
                 player
                 for player in players_by_team[penalized_team_id]
                 if player.position is not PlayerPosition.GOALIE
-                and all(
-                    active.player_id != player.player_id
-                    for active in active_penalties.values()
-                )
+                and player.player_id not in active_player_ids
+                and player.player_id not in queued_player_ids
             )
             if not eligible:
                 continue
             player = eligible[int(rng.integers(0, len(eligible)))]
+            penalty_type = (
+                PenaltyType.MINOR
+                if rng.random() < _MINOR_PENALTY_SHARE
+                else PenaltyType.MAJOR
+            )
             penalty_event = add_event(
                 current_time,
                 EventType.PENALTY,
                 penalized_team_id,
                 player.player_id,
-                situation=ManpowerSituation(
-                    max(3, situation.home_skaters - (penalized_team_id == home_team_id)),
-                    max(3, situation.away_skaters - (penalized_team_id == away_team_id)),
-                ),
+                situation=manpower(),
+                penalty_type=penalty_type,
+                penalty_duration_seconds=penalty_type.duration_seconds,
             )
-            expires_at = current_time + 120
-            active_penalties[penalty_event.event_id] = _Penalty(
-                penalty_event.event_id, penalized_team_id, player.player_id, expires_at
+            penalty = _Penalty(
+                penalty_event.event_id,
+                penalized_team_id,
+                player.player_id,
+                penalty_type,
+                penalty_type.duration_seconds,
             )
-            schedule(expires_at, 0, "PENALTY_END", penalty_event.event_id)
+            if (
+                queued_penalties[penalized_team_id]
+                or active_penalty_count(penalized_team_id)
+                >= _MAX_ACTIVE_PENALTIES_PER_TEAM
+            ):
+                queued_penalties[penalized_team_id].append(penalty)
+            else:
+                start_penalty(penalty, current_time)
 
     return (
         Match(
@@ -490,6 +634,10 @@ def _choose_shooting_team(
         if rng.random() < home_rate / (home_rate + away_rate)
         else away_team_id
     )
+
+
+def _faceoff_win_probability(home_skill: float, away_skill: float) -> float:
+    return 0.5 + 0.5 * (home_skill - away_skill)
 
 
 def _choose_shooter(

@@ -22,8 +22,8 @@ from hockeyai.validation import (
     validate_corrupted_events,
 )
 
-GENERATOR_VERSION = "0.1.0"
-SCHEMA_VERSION = "1.0.0"
+GENERATOR_VERSION = "0.3.0"
+SCHEMA_VERSION = "1.2.0"
 
 TEAMS_COLUMNS = (
     "team_id",
@@ -39,6 +39,7 @@ PLAYERS_COLUMNS = (
     "shooting_skill",
     "passing_skill",
     "defensive_skill",
+    "faceoff_skill",
     "games_played",
     "ice_time_seconds",
 )
@@ -59,6 +60,12 @@ EVENTS_COLUMNS = (
     "event_type",
     "team_id",
     "player_id",
+    "faceoff_winner_player_id",
+    "faceoff_loser_player_id",
+    "penalty_type",
+    "penalty_duration_seconds",
+    "related_penalty_event_id",
+    "penalty_end_reason",
     "x",
     "y",
     "related_shot_id",
@@ -122,6 +129,7 @@ seconds. Empty CSV cells represent nulls.
 | `shooting_skill` | float, [0,1] | no | Synthetic shooting skill. |
 | `passing_skill` | float, [0,1] | no | Synthetic passing skill. |
 | `defensive_skill` | float, [0,1] | no | Synthetic defensive skill. |
+| `faceoff_skill` | float, [0,1] | no | Synthetic skill used to weight faceoff outcomes. |
 | `games_played` | integer, games | no | Team games for skaters; goalie starts for goalies. |
 | `ice_time_seconds` | integer, seconds | no | Estimated exposure; see simulation conventions. |
 
@@ -143,8 +151,13 @@ seconds. Empty CSV cells represent nulls.
 | `event_sequence` | integer | no | Deterministic within-match sequence. |
 | `elapsed_seconds` | integer, seconds | no | Global regulation elapsed time. |
 | `period` | integer, 1–3 | no | Period derived from elapsed time. |
-| `event_type` | enum | no | FACEOFF, SHOT, SAVE, GOAL, PENALTY, PENALTY_END. |
+| `event_type` | enum | no | FACEOFF, SHOT, SAVE, GOAL, PENALTY, PENALTY_START, PENALTY_END. |
 | `team_id`, `player_id` | string | event-dependent | Related team/player foreign keys. |
+| `faceoff_winner_player_id`, `faceoff_loser_player_id` | string | FACEOFF only | Opposing forwards who won and lost the engagement. |
+| `penalty_type` | enum | PENALTY only | `MINEURE` (120 s) or `MAJEURE` (300 s). |
+| `penalty_duration_seconds` | integer, seconds | PENALTY only | Service duration; the clock starts at `PENALTY_START`. |
+| `related_penalty_event_id` | string | PENALTY_START/END only | Source `PENALTY` event key. |
+| `penalty_end_reason` | enum | PENALTY_END only | `TIME_EXPIRED` or `GOAL` (a qualifying power-play goal). |
 | `x`, `y` | float, metres | event-dependent | Rink coordinates. |
 | `related_shot_id` | string | outcome only | Shot key for GOAL or SAVE. |
 | `home_score_before`, `away_score_before` | integer, goals | no | Score immediately before this event. |

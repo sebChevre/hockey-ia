@@ -17,8 +17,11 @@ from hockeyai.geometry import (
 )
 from hockeyai.models import (
     AnomalyType,
+    Event,
     EventType,
     PlayerPosition,
+    PenaltyEndReason,
+    PenaltyType,
     ShotOutcome,
     SimulationDataset,
 )
@@ -116,6 +119,34 @@ def validate_dataset(
                 errors.append(f"event {event.event_id} player does not belong to its team")
             elif event.event_type is EventType.SAVE and player.position is not PlayerPosition.GOALIE:
                 errors.append(f"save {event.event_id} must identify a goalie")
+        if event.event_type is EventType.FACEOFF:
+            winner = players.get(event.faceoff_winner_player_id or "")
+            loser = players.get(event.faceoff_loser_player_id or "")
+            if winner is None:
+                errors.append(
+                    f"faceoff {event.event_id} references an unknown winner"
+                )
+            elif winner.position is not PlayerPosition.FORWARD:
+                errors.append(f"faceoff {event.event_id} winner must be a forward")
+            if loser is None:
+                errors.append(
+                    f"faceoff {event.event_id} references an unknown loser"
+                )
+            elif loser.position is not PlayerPosition.FORWARD:
+                errors.append(f"faceoff {event.event_id} loser must be a forward")
+            match = matches.get(event.match_id)
+            if winner is not None and loser is not None:
+                if winner.team_id == loser.team_id:
+                    errors.append(
+                        f"faceoff {event.event_id} winner and loser must be opponents"
+                    )
+                if match is not None and (
+                    winner.team_id not in (match.home_team_id, match.away_team_id)
+                    or loser.team_id not in (match.home_team_id, match.away_team_id)
+                ):
+                    errors.append(
+                        f"faceoff {event.event_id} players must belong to match teams"
+                    )
         if event.event_type is EventType.SHOT and (
             event.team_id is None or event.player_id is None
         ):
@@ -280,7 +311,12 @@ def validate_corrupted_events(
     detected: Counter[str] = Counter()
     teams = {team.team_id for team in dataset.teams}
     players = {player.player_id: player for player in dataset.players}
-    matches = {match.match_id for match in dataset.matches}
+    matches = {match.match_id: match for match in dataset.matches}
+    source_penalties = {
+        event.event_id: event
+        for event in dataset.events
+        if event.event_type is EventType.PENALTY
+    }
     event_id_counts = Counter(
         row.get("event_id")
         for row in event_rows
@@ -298,11 +334,30 @@ def validate_corrupted_events(
             errors.append(f"[duplicate] event_id {event_id} occurs {count} times")
 
     required_by_type = {
+        EventType.FACEOFF.value: (
+            "faceoff_winner_player_id",
+            "faceoff_loser_player_id",
+        ),
         EventType.SHOT.value: ("team_id", "player_id", "x", "y"),
         EventType.SAVE.value: ("team_id", "player_id", "x", "y"),
         EventType.GOAL.value: ("team_id", "player_id", "x", "y"),
-        EventType.PENALTY.value: ("team_id", "player_id"),
-        EventType.PENALTY_END.value: ("team_id", "player_id"),
+        EventType.PENALTY.value: (
+            "team_id",
+            "player_id",
+            "penalty_type",
+            "penalty_duration_seconds",
+        ),
+        EventType.PENALTY_START.value: (
+            "team_id",
+            "player_id",
+            "related_penalty_event_id",
+        ),
+        EventType.PENALTY_END.value: (
+            "team_id",
+            "player_id",
+            "related_penalty_event_id",
+            "penalty_end_reason",
+        ),
     }
 
     for row in event_rows:
@@ -347,6 +402,81 @@ def validate_corrupted_events(
             elif event_type == EventType.SAVE.value and player.position is not PlayerPosition.GOALIE:
                 errors.append(f"[reference] save {label} does not identify a goalie")
 
+        if event_type in (EventType.PENALTY_START.value, EventType.PENALTY_END.value):
+            penalty_id = row.get("related_penalty_event_id")
+            source_penalty = (
+                source_penalties.get(penalty_id)
+                if isinstance(penalty_id, str)
+                else None
+            )
+            if source_penalty is None:
+                errors.append(
+                    f"[reference] event {label} references unknown penalty {penalty_id}"
+                )
+            elif (
+                source_penalty.team_id != team_id
+                or source_penalty.player_id != player_id
+            ):
+                errors.append(
+                    f"[reference] event {label} does not match its source penalty"
+                )
+
+        if event_type == EventType.PENALTY.value:
+            penalty_type = row.get("penalty_type")
+            expected_duration = {
+                PenaltyType.MINOR.value: PenaltyType.MINOR.duration_seconds,
+                PenaltyType.MAJOR.value: PenaltyType.MAJOR.duration_seconds,
+            }.get(str(penalty_type))
+            if (
+                expected_duration is None
+                or row.get("penalty_duration_seconds") != expected_duration
+            ):
+                errors.append(f"[penalty] event {label} has invalid type or duration")
+        elif event_type == EventType.PENALTY_END.value and row.get(
+            "penalty_end_reason"
+        ) not in {reason.value for reason in PenaltyEndReason}:
+            errors.append(f"[penalty] event {label} has invalid end reason")
+
+        if event_type == EventType.FACEOFF.value:
+            faceoff_players = {}
+            for role, field in (
+                ("winner", "faceoff_winner_player_id"),
+                ("loser", "faceoff_loser_player_id"),
+            ):
+                faceoff_player_id = row.get(field)
+                if faceoff_player_id is None:
+                    continue
+                faceoff_player = (
+                    players.get(faceoff_player_id)
+                    if isinstance(faceoff_player_id, str)
+                    else None
+                )
+                if faceoff_player is None:
+                    errors.append(
+                        f"[reference] faceoff {label} has an unknown {role} player"
+                    )
+                elif faceoff_player.position is not PlayerPosition.FORWARD:
+                    errors.append(
+                        f"[reference] faceoff {label} {role} must be a forward"
+                    )
+                else:
+                    faceoff_players[role] = faceoff_player
+            winner = faceoff_players.get("winner")
+            loser = faceoff_players.get("loser")
+            if winner is not None and loser is not None:
+                if winner.team_id == loser.team_id:
+                    errors.append(
+                        f"[reference] faceoff {label} players must be opponents"
+                    )
+                match = matches.get(match_id)
+                if match is not None and (
+                    winner.team_id not in (match.home_team_id, match.away_team_id)
+                    or loser.team_id not in (match.home_team_id, match.away_team_id)
+                ):
+                    errors.append(
+                        f"[reference] faceoff {label} players must belong to match teams"
+                    )
+
         x, y = row.get("x"), row.get("y")
         if (x is None) != (y is None):
             if "x" in required_fields or "y" in required_fields:
@@ -390,39 +520,177 @@ def _check_match_events(match, events, errors) -> None:
 
     home_score = 0
     away_score = 0
-    active_penalties: list[tuple[str, str, int]] = []
+    assessed_penalties: dict[str, Event] = {}
+    penalty_status: dict[str, str] = {}
+    active_penalties: dict[str, tuple[Event, Event]] = {}
+    queued_penalties: dict[str, list[str]] = defaultdict(list)
+    expected_start: str | None = None
+    expected_goal_end: str | None = None
+    expected_goal_time: int | None = None
+
     for event in ordered:
+        if expected_goal_end is not None and not (
+            event.event_type is EventType.PENALTY_END
+            and event.related_penalty_event_id == expected_goal_end
+        ):
+            errors.append(
+                f"goal penalty end for {expected_goal_end} is not the next event"
+            )
+            expected_goal_end = None
+            expected_goal_time = None
+        if expected_start is not None and not (
+            event.event_type is EventType.PENALTY_START
+            and event.related_penalty_event_id == expected_start
+        ):
+            errors.append(
+                f"penalty start for {expected_start} is missing or out of order"
+            )
+            expected_start = None
+
         if (event.home_score_before, event.away_score_before) != (home_score, away_score):
             errors.append(f"event {event.event_id} has an inconsistent score-before snapshot")
         if event.event_type is EventType.PENALTY:
             if event.team_id is None or event.player_id is None:
                 errors.append(f"penalty {event.event_id} must identify team and player")
-            else:
-                active_penalties.append(
-                    (event.team_id, event.player_id, event.elapsed_seconds + 120)
+            if event.penalty_type is None or event.penalty_duration_seconds is None:
+                errors.append(
+                    f"penalty {event.event_id} must identify type and duration"
                 )
-        elif event.event_type is EventType.PENALTY_END:
-            matching = next(
-                (
-                    index for index, (team_id, player_id, expiry) in enumerate(active_penalties)
-                    if team_id == event.team_id
-                    and player_id == event.player_id
-                    and expiry == event.elapsed_seconds
-                ),
-                None,
-            )
-            if matching is None:
-                errors.append(f"penalty end {event.event_id} has no matching 120-second penalty")
             else:
-                active_penalties.pop(matching)
+                assessed_penalties[event.event_id] = event
+                penalty_status[event.event_id] = "queued"
+                if (
+                    len(queued_penalties[event.team_id]) == 0
+                    and sum(
+                        penalty[0].team_id == event.team_id
+                        for penalty in active_penalties.values()
+                    )
+                    < 2
+                ):
+                    expected_start = event.event_id
+                else:
+                    queued_penalties[event.team_id].append(event.event_id)
+        elif event.event_type is EventType.PENALTY_START:
+            penalty_id = event.related_penalty_event_id
+            source = assessed_penalties.get(penalty_id or "")
+            if source is None:
+                errors.append(f"penalty start {event.event_id} has no assessment")
+            else:
+                if expected_start != penalty_id:
+                    errors.append(f"penalty start {event.event_id} is unexpected")
+                if (event.team_id, event.player_id) != (
+                    source.team_id,
+                    source.player_id,
+                ):
+                    errors.append(
+                        f"penalty start {event.event_id} does not match its assessment"
+                    )
+                if penalty_status.get(penalty_id) != "queued":
+                    errors.append(f"penalty {penalty_id} starts more than once")
+                active_for_team = sum(
+                    active[0].team_id == source.team_id
+                    for active in active_penalties.values()
+                )
+                if active_for_team >= 2:
+                    errors.append(f"team {source.team_id} exceeds two active penalties")
+                active_penalties[penalty_id] = (source, event)
+                penalty_status[penalty_id] = "active"
+            if expected_start == penalty_id:
+                expected_start = None
+        elif event.event_type is EventType.PENALTY_END:
+            penalty_id = event.related_penalty_event_id
+            active = active_penalties.get(penalty_id or "")
+            if active is None:
+                errors.append(f"penalty end {event.event_id} has no active penalty")
+            else:
+                source, start_event = active
+                if (event.team_id, event.player_id) != (
+                    source.team_id,
+                    source.player_id,
+                ):
+                    errors.append(
+                        f"penalty end {event.event_id} does not match its assessment"
+                    )
+                if event.penalty_end_reason is PenaltyEndReason.TIME_EXPIRED:
+                    expected_expiry = _penalty_expiry(source, start_event)
+                    if event.elapsed_seconds != expected_expiry:
+                        errors.append(
+                            f"penalty end {event.event_id} has an inconsistent expiry time"
+                        )
+                elif event.penalty_end_reason is PenaltyEndReason.GOAL:
+                    if (
+                        expected_goal_end != penalty_id
+                        or expected_goal_time != event.elapsed_seconds
+                        or source.penalty_type is not PenaltyType.MINOR
+                    ):
+                        errors.append(
+                            f"penalty end {event.event_id} is not a valid power-play goal end"
+                        )
+                else:
+                    errors.append(
+                        f"penalty end {event.event_id} has no valid end reason"
+                    )
+                active_penalties.pop(penalty_id, None)
+                penalty_status[penalty_id] = "ended"
+                if expected_goal_end == penalty_id:
+                    expected_goal_end = None
+                    expected_goal_time = None
+                queue = queued_penalties[source.team_id]
+                if (
+                    queue
+                    and sum(
+                        penalty[0].team_id == source.team_id
+                        for penalty in active_penalties.values()
+                    )
+                    < 2
+                ):
+                    expected_start = queue.pop(0)
+
+        elif event.event_type is EventType.GOAL:
+            penalized_team_id = (
+                match.away_team_id
+                if event.team_id == match.home_team_id
+                and event.manpower_situation.away_skaters
+                < event.manpower_situation.home_skaters
+                else match.home_team_id
+                if event.team_id == match.away_team_id
+                and event.manpower_situation.home_skaters
+                < event.manpower_situation.away_skaters
+                else None
+            )
+            if penalized_team_id is not None:
+                eligible_minors = [
+                    (penalty_id, source, start)
+                    for penalty_id, (source, start) in active_penalties.items()
+                    if source.team_id == penalized_team_id
+                    and source.penalty_type is PenaltyType.MINOR
+                ]
+                if eligible_minors:
+                    penalty_id, _, _ = min(
+                        eligible_minors,
+                        key=lambda penalty: (
+                            _penalty_expiry(penalty[1], penalty[2]),
+                            penalty[1].event_sequence,
+                        ),
+                    )
+                    expected_goal_end = penalty_id
+                    expected_goal_time = event.elapsed_seconds
 
         expected_home = max(
             3,
-            5 - sum(team_id == match.home_team_id for team_id, _, _ in active_penalties),
+            5
+            - sum(
+                penalty[0].team_id == match.home_team_id
+                for penalty in active_penalties.values()
+            ),
         )
         expected_away = max(
             3,
-            5 - sum(team_id == match.away_team_id for team_id, _, _ in active_penalties),
+            5
+            - sum(
+                penalty[0].team_id == match.away_team_id
+                for penalty in active_penalties.values()
+            ),
         )
         if (event.manpower_situation.home_skaters, event.manpower_situation.away_skaters) != (
             expected_home,
@@ -436,8 +704,20 @@ def _check_match_events(match, events, errors) -> None:
                 away_score += 1
             else:
                 errors.append(f"goal {event.event_id} is not attributed to a match team")
-    if active_penalties:
-        errors.append(f"match {match.match_id} has penalties without an expiry event")
+    if expected_start is not None:
+        errors.append(f"penalty start for {expected_start} is missing")
+    if expected_goal_end is not None:
+        errors.append(f"goal penalty end for {expected_goal_end} is missing")
+    for penalty_id, (source, start_event) in active_penalties.items():
+        expected_expiry = _penalty_expiry(source, start_event)
+        if expected_expiry <= REGULATION_LENGTH_SECONDS:
+            errors.append(f"penalty {penalty_id} expired without a penalty-end event")
+
+
+def _penalty_expiry(source: Event, start_event: Event) -> int:
+    if source.penalty_duration_seconds is None:
+        return start_event.elapsed_seconds
+    return start_event.elapsed_seconds + source.penalty_duration_seconds
 
 
 def _calibration_warnings(

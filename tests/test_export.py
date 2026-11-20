@@ -62,6 +62,39 @@ def test_zip_contains_required_readable_tables_metadata_and_quality_report():
         assert "true_goal_probability" not in shots[0]
         assert shots[0]["is_goal"] in ("True", "False")
         assert shots[0]["manpower_situation"] in ("5v5", "5v4", "4v5", "4v4")
+        players = list(csv.DictReader(StringIO(archive.read("players.csv").decode())))
+        assert "faceoff_skill" in players[0]
+        events = list(csv.DictReader(StringIO(archive.read("events.csv").decode())))
+        faceoffs = [event for event in events if event["event_type"] == "FACEOFF"]
+        assert faceoffs
+        assert all(
+            event["faceoff_winner_player_id"] and event["faceoff_loser_player_id"]
+            for event in faceoffs
+        )
+        penalties = [event for event in events if event["event_type"] == "PENALTY"]
+        penalties_by_id = {event["event_id"]: event for event in penalties}
+        assert penalties
+        assert all(
+            event["penalty_type"] in ("MINEURE", "MAJEURE")
+            and int(event["penalty_duration_seconds"])
+            == (120 if event["penalty_type"] == "MINEURE" else 300)
+            for event in penalties
+        )
+        penalty_service_events = [
+            event
+            for event in events
+            if event["event_type"] in ("PENALTY_START", "PENALTY_END")
+        ]
+        assert penalty_service_events
+        assert all(
+            event["related_penalty_event_id"] in penalties_by_id
+            for event in penalty_service_events
+        )
+        assert all(
+            event["penalty_end_reason"] in ("TIME_EXPIRED", "GOAL")
+            for event in events
+            if event["event_type"] == "PENALTY_END"
+        )
         assert len(list(csv.DictReader(StringIO(archive.read("matches.csv").decode())))) == 100
         pandas_matches = pd.read_csv(BytesIO(archive.read("matches.csv")))
         pandas_shots = pd.read_csv(BytesIO(archive.read("shots.csv")))

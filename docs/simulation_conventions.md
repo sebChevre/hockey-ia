@@ -29,9 +29,14 @@
   three-standard-error tolerance.
 - `team_imbalance` controls the standard deviation of team ratings, increasing
   it from `0.025` at zero to `0.205` at 100; ratings are clipped to `[0.05, 0.95]`.
-- Penalty counts are Poisson with the configured expectation. Accepted minor
-  penalties last 120 simulated seconds; concurrent penalties cannot reduce
-  either side below three skaters. A penalty is not cut short after a goal.
+- Penalty counts are Poisson with the configured expectation. Each assessed
+ penalty is minor (`MINEURE`, 120 seconds) with 95% probability or major
+ (`MAJEURE`, 300 seconds) with 5% probability. Each team serves at most two
+ penalties at once; additional penalties wait in assessment order, and their
+ clocks begin only when service starts. This keeps at least three skaters on
+ the ice. An opposing power-play goal ends at most one active minor penalty
+ (the one with the least remaining time); major penalties continue. Expirations
+ or queued service extending beyond regulation are left unfinished in the log.
 - A non-goal shot is saved with probability 0.70, otherwise it is missed.
   Goal-probability coefficients and these mechanisms are illustrative
   simulation assumptions, not empirically fitted hockey estimates. The
@@ -39,6 +44,12 @@
   for `(beta_0, beta_distance, beta_angle, beta_skill, beta_goalie,
   beta_powerplay)`; probabilities are clipped to `[0.005, 0.70]`.
 - A faceoff is emitted at the start of each period and immediately after each
-  goal; this is not a model of every real-world faceoff.
+  goal; this is not a model of every real-world faceoff. One forward from each
+  team is selected uniformly. Each player's synthetic `faceoff_skill` is drawn
+  independently from a clipped normal distribution with mean 0.5 and standard
+  deviation 0.14. The home player's win probability is
+  `0.5 + 0.5 * (home_faceoff_skill - away_faceoff_skill)`; the losing player is
+  recorded on the same event. This illustrative rule is not fitted to real
+  faceoff data.
 - `shot_ground_truth` contains one row per shot and is separate from `shots`.
   No Streamlit, export, anomaly injection, or ML code is part of this phase.

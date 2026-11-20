@@ -20,7 +20,22 @@ class EventType(StrEnum):
     SAVE = "SAVE"
     GOAL = "GOAL"
     PENALTY = "PENALTY"
+    PENALTY_START = "PENALTY_START"
     PENALTY_END = "PENALTY_END"
+
+
+class PenaltyType(StrEnum):
+    MINOR = "MINEURE"
+    MAJOR = "MAJEURE"
+
+    @property
+    def duration_seconds(self) -> int:
+        return 120 if self is PenaltyType.MINOR else 300
+
+
+class PenaltyEndReason(StrEnum):
+    TIME_EXPIRED = "TIME_EXPIRED"
+    GOAL = "GOAL"
 
 
 class PlayerPosition(StrEnum):
@@ -100,6 +115,7 @@ class Player:
     defensive_skill: float
     games_played: int = 0
     ice_time_seconds: int = 0
+    faceoff_skill: float = 0.5
 
     def __post_init__(self) -> None:
         _validate_identifier("player_id", self.player_id)
@@ -110,6 +126,7 @@ class Player:
             ("shooting_skill", self.shooting_skill),
             ("passing_skill", self.passing_skill),
             ("defensive_skill", self.defensive_skill),
+            ("faceoff_skill", self.faceoff_skill),
         ):
             _validate_unit_interval(name, value)
         _validate_nonnegative_integer("games_played", self.games_played)
@@ -157,6 +174,12 @@ class Event:
     home_score_before: int
     away_score_before: int
     manpower_situation: ManpowerSituation
+    faceoff_winner_player_id: str | None = None
+    faceoff_loser_player_id: str | None = None
+    penalty_type: PenaltyType | None = None
+    penalty_duration_seconds: int | None = None
+    related_penalty_event_id: str | None = None
+    penalty_end_reason: PenaltyEndReason | None = None
 
     def __post_init__(self) -> None:
         _validate_identifier("event_id", self.event_id)
@@ -175,6 +198,9 @@ class Event:
             ("team_id", self.team_id),
             ("player_id", self.player_id),
             ("related_shot_id", self.related_shot_id),
+            ("faceoff_winner_player_id", self.faceoff_winner_player_id),
+            ("faceoff_loser_player_id", self.faceoff_loser_player_id),
+            ("related_penalty_event_id", self.related_penalty_event_id),
         ):
             if value is not None:
                 _validate_identifier(name, value)
@@ -186,6 +212,74 @@ class Event:
         _validate_nonnegative_integer("away_score_before", self.away_score_before)
         if not isinstance(self.manpower_situation, ManpowerSituation):
             raise ValueError("manpower_situation must be a ManpowerSituation")
+        faceoff_players = (
+            self.faceoff_winner_player_id,
+            self.faceoff_loser_player_id,
+        )
+        if self.event_type is EventType.FACEOFF:
+            if any(player_id is None for player_id in faceoff_players):
+                raise ValueError("FACEOFF events must identify winner and loser")
+            if self.faceoff_winner_player_id == self.faceoff_loser_player_id:
+                raise ValueError("FACEOFF winner and loser must be different players")
+        elif any(player_id is not None for player_id in faceoff_players):
+            raise ValueError("faceoff player IDs are only valid on FACEOFF events")
+        if self.event_type is EventType.PENALTY:
+            if self.team_id is None or self.player_id is None:
+                raise ValueError("PENALTY events must identify team and player")
+            if not isinstance(self.penalty_type, PenaltyType):
+                raise ValueError("PENALTY events must identify a PenaltyType")
+            if (
+                isinstance(self.penalty_duration_seconds, bool)
+                or not isinstance(self.penalty_duration_seconds, int)
+                or self.penalty_duration_seconds != self.penalty_type.duration_seconds
+            ):
+                raise ValueError("penalty duration does not match penalty type")
+            if (
+                self.related_penalty_event_id is not None
+                or self.penalty_end_reason is not None
+            ):
+                raise ValueError("PENALTY events cannot link to another penalty")
+        elif self.event_type is EventType.PENALTY_START:
+            if (
+                self.team_id is None
+                or self.player_id is None
+                or self.related_penalty_event_id is None
+            ):
+                raise ValueError(
+                    "PENALTY_START events must identify team, player, and penalty"
+                )
+            if (
+                self.penalty_type is not None
+                or self.penalty_duration_seconds is not None
+                or self.penalty_end_reason is not None
+            ):
+                raise ValueError("PENALTY_START fields must be stored on PENALTY")
+        elif self.event_type is EventType.PENALTY_END:
+            if (
+                self.team_id is None
+                or self.player_id is None
+                or self.related_penalty_event_id is None
+            ):
+                raise ValueError(
+                    "PENALTY_END events must identify team, player, and penalty"
+                )
+            if not isinstance(self.penalty_end_reason, PenaltyEndReason):
+                raise ValueError("PENALTY_END events must identify an end reason")
+            if (
+                self.penalty_type is not None
+                or self.penalty_duration_seconds is not None
+            ):
+                raise ValueError("PENALTY_END type and duration come from PENALTY")
+        elif any(
+            value is not None
+            for value in (
+                self.penalty_type,
+                self.penalty_duration_seconds,
+                self.related_penalty_event_id,
+                self.penalty_end_reason,
+            )
+        ):
+            raise ValueError("penalty fields are only valid on penalty events")
 
 
 @dataclass(frozen=True, slots=True)

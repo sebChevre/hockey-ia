@@ -7,6 +7,8 @@ from hockeyai import (
     EventType,
     ManpowerSituation,
     Match,
+    PenaltyEndReason,
+    PenaltyType,
     Player,
     PlayerPosition,
     Shot,
@@ -23,12 +25,67 @@ def test_team_and_player_ratings_are_bounded():
         Team("T1", "Team 1", attack_rating=1.1, defense_rating=0.5, goalie_rating=0.5)
     with pytest.raises(ValueError, match="between 0 and 1"):
         Player("P1", "T1", PlayerPosition.FORWARD, 0.5, -0.1, 0.5)
+    with pytest.raises(ValueError, match="between 0 and 1"):
+        Player(
+            "P1",
+            "T1",
+            PlayerPosition.FORWARD,
+            0.5,
+            0.5,
+            0.5,
+            faceoff_skill=1.1,
+        )
 
 
 def test_manpower_is_in_home_away_order_and_never_below_three():
     assert ManpowerSituation(5, 4).code == "5v4"
     with pytest.raises(ValueError):
         ManpowerSituation(2, 5)
+
+
+def test_penalty_event_contracts_and_type_durations():
+    assert PenaltyType.MINOR.duration_seconds == 120
+    assert PenaltyType.MAJOR.duration_seconds == 300
+
+    with pytest.raises(ValueError, match="duration does not match"):
+        Event(
+            event_id="E1",
+            match_id="M1",
+            event_sequence=1,
+            elapsed_seconds=10,
+            period=1,
+            event_type=EventType.PENALTY,
+            team_id="T1",
+            player_id="P1",
+            x=None,
+            y=None,
+            related_shot_id=None,
+            home_score_before=0,
+            away_score_before=0,
+            manpower_situation=ManpowerSituation(),
+            penalty_type=PenaltyType.MINOR,
+            penalty_duration_seconds=300,
+        )
+
+    with pytest.raises(ValueError, match="must identify team, player, and penalty"):
+        Event(
+            event_id="E2",
+            match_id="M1",
+            event_sequence=2,
+            elapsed_seconds=10,
+            period=1,
+            event_type=EventType.PENALTY_START,
+            team_id="T1",
+            player_id="P1",
+            x=None,
+            y=None,
+            related_shot_id=None,
+            home_score_before=0,
+            away_score_before=0,
+            manpower_situation=ManpowerSituation(),
+        )
+
+    assert PenaltyEndReason.GOAL.value == "GOAL"
 
 
 def test_match_rejects_same_team_and_negative_score():
@@ -53,6 +110,67 @@ def test_event_checks_period_and_coordinate_pair():
         Event(
             "E1", "M1", 0, 0, True, EventType.FACEOFF, "T1", None,
             None, None, None, 0, 0, ManpowerSituation(),
+        )
+
+
+def test_faceoff_event_requires_distinct_winner_and_loser():
+    event = Event(
+        "E1",
+        "M1",
+        0,
+        0,
+        1,
+        EventType.FACEOFF,
+        None,
+        None,
+        None,
+        None,
+        None,
+        0,
+        0,
+        ManpowerSituation(),
+        faceoff_winner_player_id="P1",
+        faceoff_loser_player_id="P2",
+    )
+    assert event.faceoff_winner_player_id == "P1"
+    assert event.faceoff_loser_player_id == "P2"
+
+    with pytest.raises(ValueError, match="must identify winner and loser"):
+        Event(
+            "E2",
+            "M1",
+            1,
+            1,
+            1,
+            EventType.FACEOFF,
+            None,
+            None,
+            None,
+            None,
+            None,
+            0,
+            0,
+            ManpowerSituation(),
+            faceoff_winner_player_id="P1",
+        )
+    with pytest.raises(ValueError, match="must be different players"):
+        Event(
+            "E3",
+            "M1",
+            2,
+            2,
+            1,
+            EventType.FACEOFF,
+            None,
+            None,
+            None,
+            None,
+            None,
+            0,
+            0,
+            ManpowerSituation(),
+            faceoff_winner_player_id="P1",
+            faceoff_loser_player_id="P1",
         )
 
 

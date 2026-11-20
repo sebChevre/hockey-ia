@@ -109,17 +109,18 @@ Le bouton **Générer** valide les champs, lance la génération et affiche une 
 
 ### 4.3 Types d'événements
 
-**MVP :** `FACEOFF`, `SHOT`, `SAVE`, `GOAL`, `PENALTY`, `PENALTY_END`. Les tirs ratés peuvent être représentés par `SHOT` avec `shot_outcome=MISSED` sans `SAVE`. Les autres tirs ont `shot_outcome=SAVED` ou `GOAL`.
+**MVP :** `FACEOFF`, `SHOT`, `SAVE`, `GOAL`, `PENALTY`, `PENALTY_START`, `PENALTY_END`. Les tirs ratés peuvent être représentés par `SHOT` avec `shot_outcome=MISSED` sans `SAVE`. Les autres tirs ont `shot_outcome=SAVED` ou `GOAL`.
 
 **Règles obligatoires :**
 
 1. Chaque `GOAL` et `SAVE` référence exactement un `SHOT` via `related_shot_id` ; un tir ne peut avoir qu'une seule issue finale.
 2. Le score augmente uniquement à l'occasion d'un `GOAL` ; le score final est recalculable depuis les événements.
-3. Les pénalités ont une durée de 120 secondes de jeu dans le MVP, avec expiration à `PENALTY_END` ; la fin anticipée sur but en supériorité peut être omise **si cette simplification est clairement indiquée**.
-4. Le moteur maintient un état de situation numérique cohérent (5v5, 5v4, 4v5, éventuellement 4v4) ; ne pas descendre sous trois joueurs de champ par équipe.
-5. Un événement de joueur doit référencer un joueur de l'équipe indiquée ; un tir ne peut être attribué à un gardien dans le MVP.
-6. L'ordre des événements est déterministe, trié par `(match_id, elapsed_seconds, event_sequence)` ; plusieurs événements peuvent partager la même seconde.
-7. Un `FACEOFF` est produit au début de chaque période et après chaque but, sans prétendre modéliser tous les engagements réels.
+3. Une pénalité est mineure (`MINEURE`, 120 secondes) dans 95 % des cas ou majeure (`MAJEURE`, 300 secondes) dans 5 % des cas. `PENALTY` constate la pénalité, `PENALTY_START` démarre son service et `PENALTY_END` le termine ; les événements de service référencent la pénalité d'origine.
+4. Chaque équipe peut avoir au plus deux pénalités en service. Les pénalités supplémentaires attendent leur tour et leur chronomètre ne démarre qu'à `PENALTY_START`. Le nombre de patineurs ne descend jamais sous trois.
+5. Un but de l'équipe en supériorité termine au plus une pénalité mineure active de l'équipe adverse (celle dont l'échéance est la plus proche), avec `PENALTY_END` portant la raison `GOAL`. Les majeures ne prennent pas fin sur un but. À expiration normale, la raison est `TIME_EXPIRED`. L'ordre à temps égal est `GOAL`, `PENALTY_END`, éventuel `PENALTY_START` de la file, puis `FACEOFF`.
+6. Un événement de joueur doit référencer un joueur de l'équipe indiquée ; un tir ne peut être attribué à un gardien dans le MVP.
+7. L'ordre des événements est déterministe, trié par `(match_id, elapsed_seconds, event_sequence)` ; plusieurs événements peuvent partager la même seconde.
+8. Un `FACEOFF` est produit au début de chaque période et après chaque but, sans prétendre modéliser tous les engagements réels.
 
 ### 4.4 Génération probabiliste (hybride simplifiée)
 
@@ -129,7 +130,7 @@ Pour chaque match :
 
 1. Initialiser score, période, pénalités actives et équipes.
 2. Générer des instants candidats de tirs via un processus de Poisson, avec intensité dépendant de `offensive_intensity`, des forces d'équipes, de l'avantage à domicile et de la situation numérique. Une base indicative est **55 à 70 tirs tentés par match au total**, à calibrer et documenter.
-3. Générer des pénalités via un autre processus de Poisson dont l'espérance est `penalties_per_match` ; insérer les débuts et fins de pénalité dans l'ordre temporel.
+3. Générer des appels de pénalité via un processus de Poisson d'espérance `penalties_per_match`, choisir le type selon la proportion mineure/majeure, puis gérer le service actif et la file d'attente dans l'ordre temporel.
 4. Pour chaque tir, choisir l'équipe selon les intensités relatives, un joueur de champ éligible, une position sur la patinoire et un type de tir.
 5. Calculer distance et angle depuis le but visé. Calculer une probabilité de but cachée, bornée, par exemple :
 
@@ -171,7 +172,7 @@ Les colonnes suivantes sont obligatoires ; des colonnes supplémentaires sont po
 
 ### `events.csv`
 
-`event_id`, `match_id`, `event_sequence`, `elapsed_seconds`, `period`, `event_type`, `team_id`, `player_id`, `x`, `y`, `related_shot_id`, `home_score_before`, `away_score_before`, `manpower_situation`.
+`event_id`, `match_id`, `event_sequence`, `elapsed_seconds`, `period`, `event_type`, `team_id`, `player_id`, `faceoff_winner_player_id`, `faceoff_loser_player_id`, `penalty_type`, `penalty_duration_seconds`, `related_penalty_event_id`, `penalty_end_reason`, `x`, `y`, `related_shot_id`, `home_score_before`, `away_score_before`, `manpower_situation`.
 
 Les champs non applicables à un type d'événement peuvent être nuls ; le dictionnaire précise lesquels.
 

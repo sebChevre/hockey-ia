@@ -157,6 +157,14 @@ def event_to_row(event: Event) -> dict[str, object]:
         "event_type": event.event_type.value,
         "team_id": event.team_id,
         "player_id": event.player_id,
+        "faceoff_winner_player_id": event.faceoff_winner_player_id,
+        "faceoff_loser_player_id": event.faceoff_loser_player_id,
+        "penalty_type": event.penalty_type.value if event.penalty_type else None,
+        "penalty_duration_seconds": event.penalty_duration_seconds,
+        "related_penalty_event_id": event.related_penalty_event_id,
+        "penalty_end_reason": (
+            event.penalty_end_reason.value if event.penalty_end_reason else None
+        ),
         "x": event.x,
         "y": event.y,
         "related_shot_id": event.related_shot_id,

@@ -5,12 +5,15 @@ import pytest
 from hockeyai import (
     EventType,
     GoalProbabilityCoefficients,
+    PenaltyEndReason,
+    PenaltyType,
     PlayerPosition,
     SimulationConfig,
     goal_probability,
     simulate_dataset,
 )
 from hockeyai.validation import validate_dataset
+from hockeyai.engine import _faceoff_win_probability
 
 
 def test_goal_probability_is_bounded_and_monotonic_for_expected_inputs():
@@ -57,7 +60,55 @@ def test_roster_and_event_tables_are_consistent_and_reproducible():
     )
     assert all(player.games_played > 0 for player in first.players)
     assert all(player.ice_time_seconds > 0 for player in first.players)
+    assert all(0 <= player.faceoff_skill <= 1 for player in first.players)
+    penalties = [
+        event for event in first.events if event.event_type is EventType.PENALTY
+    ]
+    assert 0.9 < sum(
+        event.penalty_type is PenaltyType.MINOR for event in penalties
+    ) / len(penalties) < 0.99
+    assert any(event.penalty_type is PenaltyType.MAJOR for event in penalties)
+    penalties_by_id = {event.event_id: event for event in penalties}
+    service_events = [
+        event
+        for event in first.events
+        if event.event_type in (EventType.PENALTY_START, EventType.PENALTY_END)
+    ]
+    assert service_events
+    assert all(
+        penalties_by_id[event.related_penalty_event_id].team_id == event.team_id
+        and penalties_by_id[event.related_penalty_event_id].player_id == event.player_id
+        for event in service_events
+    )
+    assert any(
+        event.event_type is EventType.PENALTY_END
+        and event.penalty_end_reason is PenaltyEndReason.GOAL
+        for event in first.events
+    )
+    players_by_id = {player.player_id: player for player in first.players}
+    matches_by_id = {match.match_id: match for match in first.matches}
+    faceoffs = [
+        event for event in first.events if event.event_type is EventType.FACEOFF
+    ]
+    assert faceoffs
+    for event in faceoffs:
+        winner = players_by_id[event.faceoff_winner_player_id]
+        loser = players_by_id[event.faceoff_loser_player_id]
+        match = matches_by_id[event.match_id]
+        assert winner.position is PlayerPosition.FORWARD
+        assert loser.position is PlayerPosition.FORWARD
+        assert winner.team_id != loser.team_id
+        assert {winner.team_id, loser.team_id} == {
+            match.home_team_id,
+            match.away_team_id,
+        }
     assert validate_dataset(first, config).is_valid
+
+
+def test_faceoff_win_probability_is_weighted_by_relative_skill():
+    assert _faceoff_win_probability(0.5, 0.5) == 0.5
+    assert _faceoff_win_probability(0.8, 0.2) == pytest.approx(0.8)
+    assert _faceoff_win_probability(0.2, 0.8) == pytest.approx(0.2)
 
 
 def test_different_seed_changes_simulation_and_progress_reports_each_match():
@@ -111,6 +162,17 @@ def test_validation_finds_corrupted_cross_table_link():
 
     assert not report.is_valid
     assert any("unknown team" in error for error in report.errors)
+
+    faceoff = next(
+        event for event in dataset.events if event.event_type is EventType.FACEOFF
+    )
+    bad_faceoff = replace(faceoff, faceoff_winner_player_id="UNKNOWN-PLAYER")
+    bad_faceoffs = tuple(
+        bad_faceoff if event.event_id == faceoff.event_id else event
+        for event in dataset.events
+    )
+    faceoff_report = validate_dataset(replace(dataset, events=bad_faceoffs))
+    assert any("unknown winner" in error for error in faceoff_report.errors)
 
 
 def test_validation_warns_when_documented_baseline_calibration_is_missed():
